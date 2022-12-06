@@ -1,0 +1,14 @@
+{
+	"name": "torch-simple-dev",
+	"context": "..",
+	"dockerFile": "../docker-dev/Dockerfile",
+	// "runArgs": [	"--gpus", "device=0" ],
+	"remoteUser": "user",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python"
+			]
+		}
+	}
+}
