@@ -6,5 +6,12 @@
     },
     "editor.formatOnSave": true,
     "python.formatting.provider": "black",
-    "python.venvPath": "${workspaceFolder}/.venv"
+    "python.venvPath": "${workspaceFolder}/.venv",
+    "python.testing.pytestArgs": [
+        "tests",
+        "torch_simple",
+        "--doctest-modules"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
 }
