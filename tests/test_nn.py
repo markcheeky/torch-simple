@@ -18,16 +18,18 @@ class TestConstant:
         argss = [
             (),
             (1, 2),
-            torch.ones(23) * 5,
+            (torch.ones(23) * 5,),
         ]
 
         kwargss = [
             {},
             {"hello": "world"},
+            {"a": torch.zeros(0), "b": [1, 2]},
             {"a": torch.ones(1, 2, 3), "b": torch.randn(4, 5, 6, 7)},
         ]
 
         for value, args, kwargs in itertools.product(values, argss, kwargss):
+            assert isinstance(kwargs, dict)
             for trainable in [True, False]:
                 layer = Constant(value, trainable=trainable)
                 assert torch.allclose(layer(*args, **kwargs), value)
