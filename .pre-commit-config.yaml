@@ -27,6 +27,6 @@ repos:
       - id: pytest
         name: pytest
         entry: pytest
-        args: ["--cov=torch_simple", "--cov-report=term-missing", "tests"]
+        args: ["--cov=torch_simple", "--cov-report=term-missing", "tests", "--doctest-glob=*.py"]
         language: system
         pass_filenames: false
