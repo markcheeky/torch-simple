@@ -12,7 +12,7 @@ Side = Literal["start", "end", "middle"]
 
 def _check_pad_truncate_args_valid(
     x: Tensor,
-    shape: tuple[int] | torch.Size,
+    shape: tuple[int, ...],
     side: Side | Iterable[Side],
 ) -> None:
     sides = typing.get_args(Side)
@@ -29,26 +29,55 @@ def _check_pad_truncate_args_valid(
             raise ValueError(f"side and shape must have same length, got {side} and {shape}")
 
     if len(x.shape) != len(shape):
-        raise ValueError(
+        raise IncompatibleShapesError(
             "input and output shapes must have same number of dimensions, "
-            f"got {x.shape} and {shape}"
+            f"got {x.shape} and {shape}",
+            [x],
         )
 
 
 def pad_to_shape(
     x: Tensor,
-    shape: tuple[int] | torch.Size,
+    shape: tuple[int, ...],
     align: Side | Iterable[Side] = "start",
-    raise_if_larger: bool = True,
+    strict: bool = True,
     **kwargs: Any,
 ) -> Tensor:
     """
     Pads x to match a desired shape.
+
+    If any dimension of x is larger than the corresponding dimension of shape, either:
+    1) if strict is True, raises an error
+    2) if strict is False, the output will preserve the original (larger) dimension
+
+    >>> x = torch.ones((2, 3), dtype=int)
+    >>> y = pad_to_shape(x, (4, 6), align="start")
+    >>> y.numpy()
+    array([[1, 1, 1, 0, 0, 0],
+           [1, 1, 1, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0]])
+
+    >>> x = torch.ones((2, 3), dtype=int)
+    >>> y = pad_to_shape(x, (4, 6), align=("start", "end"))
+    >>> y.numpy()
+    array([[0, 0, 0, 1, 1, 1],
+           [0, 0, 0, 1, 1, 1],
+           [0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0]])
+
+    >>> x = torch.ones((2, 3), dtype=int)
+    >>> y = pad_to_shape(x, (4, 6), align="middle")
+    >>> y.numpy()
+    array([[0, 0, 0, 0, 0, 0],
+           [0, 1, 1, 1, 0, 0],
+           [0, 1, 1, 1, 0, 0],
+           [0, 0, 0, 0, 0, 0]])
     """
 
     _check_pad_truncate_args_valid(x, shape, align)
 
-    if raise_if_larger and any(dim_x > dim_y for dim_x, dim_y in zip(x.shape, shape)):
+    if strict and any(dim_x > dim_y for dim_x, dim_y in zip(x.shape, shape)):
         raise IncompatibleShapesError(
             f"Input shape {x.shape} has a dimension larger than "
             f"output shape {shape} and raise_if_larger=True",
@@ -81,17 +110,21 @@ def pad_to_shape(
 
 def truncate_to_shape(
     x: Tensor,
-    shape: tuple[int] | torch.Size,
+    shape: tuple[int, ...],
     keep_side: Side | Iterable[Side] = "start",
-    raise_if_smaller: bool = True,
+    strict: bool = True,
 ) -> Tensor:
     """
     Truncates x to match a desired shape.
+
+    If any dimension of x is smaller than the corresponding dimension of shape, either:
+    1) if strict is True, raises an error
+    2) if strict is False, the output will preserve the original (smaller) dimension
     """
 
     _check_pad_truncate_args_valid(x, shape, keep_side)
 
-    if raise_if_smaller and any(dim_x < dim_y for dim_x, dim_y in zip(x.shape, shape)):
+    if strict and any(dim_x < dim_y for dim_x, dim_y in zip(x.shape, shape)):
         raise IncompatibleShapesError(
             f"Input shape {x.shape} has a dimension smaller than "
             f"output shape {shape} and raise_if_smaller=True",
