@@ -120,6 +120,29 @@ def truncate_to_shape(
     If any dimension of x is smaller than the corresponding dimension of shape, either:
     1) if strict is True, raises an error
     2) if strict is False, the output will preserve the original (smaller) dimension
+
+    >>> x = torch.arange(4*6, dtype=int).reshape(4, 6)
+    >>> x.numpy()
+    array([[ 0,  1,  2,  3,  4,  5],
+           [ 6,  7,  8,  9, 10, 11],
+           [12, 13, 14, 15, 16, 17],
+           [18, 19, 20, 21, 22, 23]])
+
+    >>> y = truncate_to_shape(x, (2, 3), keep_side="start")
+    >>> y.numpy()
+    array([[0, 1, 2],
+           [6, 7, 8]])
+
+    >>> y = truncate_to_shape(x, (2, 3), keep_side=("start", "end"))
+    >>> y.numpy()
+    array([[ 3,  4,  5],
+           [ 9, 10, 11]])
+
+    >>> y = truncate_to_shape(x, (2, 3), keep_side="middle")
+    >>> y.numpy()
+    array([[ 7,  8,  9],
+           [13, 14, 15]])
+
     """
 
     _check_pad_truncate_args_valid(x, shape, keep_side)
