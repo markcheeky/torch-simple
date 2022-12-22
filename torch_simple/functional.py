@@ -1,13 +1,12 @@
 import itertools
 import typing
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable
 
 import torch
 from torch import Tensor
 
 from torch_simple.exceptions import IncompatibleShapesError
-
-Side = Literal["start", "end", "middle"]
+from torch_simple.typedefs import Side
 
 
 def _check_pad_truncate_args_valid(
