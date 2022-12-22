@@ -341,3 +341,91 @@ class Residual(torch.nn.Module):
         extra.append(f"learn_skipping_weight={self.skipping_weight is not None}")
         extra.append(f"learn_residual_weight={self.residual_weight is not None}")
         return ", ".join(extra)
+
+
+class FeedForwardBlock(torch.nn.Module):
+    def __init__(
+        self,
+        input_dim: int | None,
+        hidden_dim: int | None,
+        output_dim: int,
+        hidden_activation: str | torch.nn.Module | Callable[[Tensor], Tensor],
+        is_residual: bool,
+        num_layers: int = 2,
+        use_bias: bool = True,
+        output_activation: str | torch.nn.Module | Callable[[Tensor], Tensor] | None = None,
+        norm_layer: str | torch.nn.Module | Callable[[Tensor], Tensor] | Type | None = None,
+        hidden_activation_kwargs: dict[str, Any] | None = None,
+        output_activation_kwargs: dict[str, Any] | None = None,
+        residual_kwargs: dict[str, Any] | None = None,
+        norm_layer_kwargs: dict[str, Any] | None = None,
+        dropout: float | torch.nn.Module | Callable[[Tensor], Tensor] | None = 0.0,
+    ) -> None:
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.hidden_activation = hidden_activation
+        self.is_residual = is_residual
+        self.num_layers = num_layers
+        self.output_activation = output_activation
+
+        if hidden_activation_kwargs is None:
+            hidden_activation_kwargs = {}
+        if output_activation_kwargs is None:
+            output_activation_kwargs = {}
+        if norm_layer_kwargs is None:
+            norm_layer_kwargs = {}
+        if residual_kwargs is None:
+            residual_kwargs = {}
+
+        if num_layers < 1:
+            raise ValueError("num_layers must be at least 1")
+
+        if hidden_dim is None and num_layers != 1:
+            raise ValueError("hidden_dim must be specified if num_layers > 1")
+
+        dims = [input_dim] + [hidden_dim] * (num_layers - 1) + [output_dim]
+
+        layers: list[torch.nn.Module] = []
+        for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
+            assert out_dim is not None
+            if in_dim is None:
+                layers.append(torch.nn.LazyLinear(out_dim, use_bias))
+            else:
+                layers.append(torch.nn.Linear(in_dim, out_dim, use_bias))
+
+            if i == num_layers - 1:
+                activation = get_activation(output_activation, output_activation_kwargs)
+            else:
+                activation = get_activation(hidden_activation, hidden_activation_kwargs)
+
+            if activation is not None:
+                layers.append(activation)
+
+        linears = [layer for layer in layers if isinstance(layer, torch.nn.Linear)]
+        assert len(linears) == num_layers
+
+        norm = get_norm_layer(
+            norm_layer,
+            prefer_lazy=True,
+            kwargs=norm_layer_kwargs,
+            num_features=output_dim,
+        )
+        if norm is not None:
+            layers.append(norm)
+
+        self.nn: torch.nn.Module = torch.nn.Sequential(*layers)
+
+        if is_residual:
+            self.nn = Residual(self.nn, **residual_kwargs)
+
+        dropout_layer = get_dropout(dropout)
+        if dropout_layer is not None:
+            if isinstance(self.nn, Residual):
+                self.nn = torch.nn.Sequential(self.nn, dropout_layer)
+            elif isinstance(self.nn, torch.nn.Sequential):
+                self.nn.append(dropout_layer)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.nn(x)
