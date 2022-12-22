@@ -1,10 +1,139 @@
-from typing import Any, Callable, Iterable
+import inspect
+import math
+import numbers
+from typing import Any, Callable, Iterable, Type
 
 import torch
 from torch import Tensor
 
 from torch_simple.exceptions import IncompatibleShapesError
-from torch_simple.functional import Side, pad_to_shape, truncate_to_shape
+from torch_simple.functional import pad_to_shape, truncate_to_shape
+from torch_simple.typedefs import Side
+from torch_simple.utils import deep_copy_with_pickle_fallback
+
+
+def get_activation(
+    activation: str | torch.nn.Module | Callable[[Tensor], Tensor] | Type | None,
+    kwargs: dict[str, Any] | None = None,
+    return_identity_if_none: bool = False,
+) -> torch.nn.Module | None:
+    """
+    Returns the activation function as a torch.nn.Module.
+    It will create a copy if a module is passed, so
+    that the parameters are not accidentally shared.
+    """
+
+    if kwargs is None:
+        kwargs = {}
+
+    if activation is None or activation == "none":
+        if return_identity_if_none:
+            return torch.nn.Identity()
+        else:
+            return None
+
+    if inspect.isclass(activation):
+        if issubclass(activation, torch.nn.Module):
+            return activation(**kwargs)
+        elif callable(activation):
+            return Lambda(activation, kwargs)
+        else:
+            raise ValueError(f"Invalid activation: {activation}")
+
+    if isinstance(activation, torch.nn.Module):
+        # some loss functions can have parameters,
+        # so we need to return a copy of the module
+        # so the parameters are not shared
+        return deep_copy_with_pickle_fallback(activation)
+
+    if callable(activation):
+        return Lambda(activation)
+
+    if isinstance(activation, str):
+        for scope in [torch, torch.nn, torch.nn.modules, torch.nn.functional]:
+            fn = getattr(scope, activation, None)
+            if fn is not None:
+                break
+
+        if fn is None:
+            raise ValueError(f"Invalid activation: {activation}")
+
+        if inspect.isclass(fn) or callable(fn):
+            return get_activation(fn, kwargs)
+
+    raise ValueError(f"Invalid activation: {activation}")
+
+
+def get_dropout(
+    drop: float | torch.nn.Module | Callable[[Tensor], Tensor] | None,
+    return_dropout_if_none: bool = False,
+) -> torch.nn.Module | None:
+
+    if drop is None or (isinstance(drop, numbers.Real) and math.isclose(drop, 0.0)):
+        if return_dropout_if_none:
+            return torch.nn.Dropout(0.0)
+        else:
+            return None
+
+    if isinstance(drop, torch.nn.Module):
+        return deep_copy_with_pickle_fallback(drop)
+
+    if isinstance(drop, float):
+        return torch.nn.Dropout(drop)
+
+    if callable(drop):
+        return Lambda(drop)
+
+    raise ValueError(f"Invalid dropout: {drop}")
+
+
+def get_norm_layer(
+    norm_layer: str | torch.nn.Module | Callable[[Tensor], Tensor] | Type | None,
+    kwargs: dict[str, Any] | None = None,
+    prefer_lazy: bool = True,
+    return_identity_if_none: bool = False,
+    num_features: int | None = None,
+) -> torch.nn.Module | None:
+
+    if kwargs is None:
+        kwargs = {}
+
+    if norm_layer is None or norm_layer == "none":
+        return torch.nn.Identity() if return_identity_if_none else None
+
+    if inspect.isclass(norm_layer):
+        if inspect.signature(norm_layer.__init__).parameters.get("num_features") is not None:
+            if num_features is None:
+                raise ValueError("num_features must be specified if norm_layer is a class")
+            kwargs["num_features"] = num_features
+        return norm_layer(**kwargs)
+
+    if isinstance(norm_layer, torch.nn.Module):
+        return deep_copy_with_pickle_fallback(norm_layer)
+
+    if isinstance(norm_layer, str):
+        for scope in [torch, torch.nn, torch.nn.modules, torch.nn.functional]:
+            fn = getattr(scope, norm_layer, None)
+            fn_lazy = getattr(scope, f"Lazy{norm_layer}", None)
+            if prefer_lazy and fn_lazy is not None:
+                fn = fn_lazy
+
+            if fn is not None:
+                break
+
+        if fn is None:
+            raise ValueError(f"Invalid norm_layer: {norm_layer}")
+
+        if inspect.isclass(fn):
+            return get_norm_layer(fn, kwargs, prefer_lazy, return_identity_if_none, num_features)
+
+        if callable(fn):
+            return Lambda(fn, kwargs)
+
+    if callable(norm_layer):
+        return Lambda(norm_layer)
+
+    raise ValueError(f"Invalid norm_layer: {norm_layer}")
 
 
 class Constant(torch.nn.Module):
