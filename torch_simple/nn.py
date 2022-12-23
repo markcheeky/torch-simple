@@ -362,12 +362,12 @@ class FeedForwardBlock(torch.nn.Module):
         use_bias: bool = True,
         output_activation: ActivationLike = None,
         norm_layer: NormLayerLike = None,
-        hidden_activation_kwargs: dict[str, Any] | None = None,
-        output_activation_kwargs: dict[str, Any] | None = None,
-        residual_kwargs: dict[str, Any] | None = None,
         norm_layer_kwargs: dict[str, Any] | None = None,
         dropout: DropoutLike = None,
+        residual_kwargs: dict[str, Any] | None = None,
         dropout_kwargs: dict[str, Any] | None = None,
+        hidden_activation_kwargs: dict[str, Any] | None = None,
+        output_activation_kwargs: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.input_dim = input_dim
