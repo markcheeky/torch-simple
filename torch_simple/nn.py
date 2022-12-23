@@ -1,19 +1,22 @@
-import inspect
-import math
-import numbers
-from typing import Any, Callable, Iterable, Type
+from __future__ import annotations
 
+import inspect
+from collections import OrderedDict
+from typing import Any, Callable, Iterable
+
+import pydantic
 import torch
+from pydantic import PositiveInt
 from torch import Tensor
 
 from torch_simple.exceptions import IncompatibleShapesError
 from torch_simple.functional import pad_to_shape, truncate_to_shape
-from torch_simple.typedefs import Side
+from torch_simple.typedefs import ActivationLike, DropoutLike, NormLayerLike, Side
 from torch_simple.utils import deep_copy_with_pickle_fallback
 
 
 def get_activation(
-    activation: str | torch.nn.Module | Callable[[Tensor], Tensor] | Type | None,
+    activation: ActivationLike,
     kwargs: dict[str, Any] | None = None,
     return_identity_if_none: bool = False,
 ) -> torch.nn.Module | None:
@@ -47,7 +50,7 @@ def get_activation(
         return deep_copy_with_pickle_fallback(activation)
 
     if callable(activation):
-        return Lambda(activation)
+        return Lambda(activation, kwargs)
 
     if isinstance(activation, str):
         for scope in [torch, torch.nn, torch.nn.modules, torch.nn.functional]:
@@ -65,13 +68,17 @@ def get_activation(
 
 
 def get_dropout(
-    drop: float | torch.nn.Module | Callable[[Tensor], Tensor] | None,
+    drop: DropoutLike,
     return_dropout_if_none: bool = False,
+    kwargs: dict[str, Any] | None = None,
 ) -> torch.nn.Module | None:
 
-    if drop is None or (isinstance(drop, numbers.Real) and math.isclose(drop, 0.0)):
+    if kwargs is None:
+        kwargs = {}
+
+    if drop is None or drop == "none":
         if return_dropout_if_none:
-            return torch.nn.Dropout(0.0)
+            return torch.nn.Dropout(0.0, **kwargs)
         else:
             return None
 
@@ -79,18 +86,18 @@ def get_dropout(
         return deep_copy_with_pickle_fallback(drop)
 
     if isinstance(drop, float):
-        return torch.nn.Dropout(drop)
+        return torch.nn.Dropout(drop, **kwargs)
 
     if callable(drop):
-        return Lambda(drop)
+        return Lambda(drop, kwargs)
 
     raise ValueError(f"Invalid dropout: {drop}")
 
 
 def get_norm_layer(
-    norm_layer: str | torch.nn.Module | Callable[[Tensor], Tensor] | Type | None,
+    norm_layer: NormLayerLike,
     kwargs: dict[str, Any] | None = None,
-    prefer_lazy: bool = True,
+    prefer_lazy: bool = False,
     return_identity_if_none: bool = False,
     num_features: int | None = None,
 ) -> torch.nn.Module | None:
@@ -349,17 +356,18 @@ class FeedForwardBlock(torch.nn.Module):
         input_dim: int | None,
         hidden_dim: int | None,
         output_dim: int,
-        hidden_activation: str | torch.nn.Module | Callable[[Tensor], Tensor],
+        hidden_activation: ActivationLike,
         is_residual: bool,
-        num_layers: int = 2,
+        num_layers: int,
         use_bias: bool = True,
-        output_activation: str | torch.nn.Module | Callable[[Tensor], Tensor] | None = None,
-        norm_layer: str | torch.nn.Module | Callable[[Tensor], Tensor] | Type | None = None,
+        output_activation: ActivationLike = None,
+        norm_layer: NormLayerLike = None,
         hidden_activation_kwargs: dict[str, Any] | None = None,
         output_activation_kwargs: dict[str, Any] | None = None,
         residual_kwargs: dict[str, Any] | None = None,
         norm_layer_kwargs: dict[str, Any] | None = None,
-        dropout: float | torch.nn.Module | Callable[[Tensor], Tensor] | None = 0.0,
+        dropout: DropoutLike = None,
+        dropout_kwargs: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.input_dim = input_dim
@@ -378,6 +386,8 @@ class FeedForwardBlock(torch.nn.Module):
             norm_layer_kwargs = {}
         if residual_kwargs is None:
             residual_kwargs = {}
+        if dropout_kwargs is None:
+            dropout_kwargs = {}
 
         if num_layers < 1:
             raise ValueError("num_layers must be at least 1")
@@ -408,7 +418,6 @@ class FeedForwardBlock(torch.nn.Module):
 
         norm = get_norm_layer(
             norm_layer,
-            prefer_lazy=True,
             kwargs=norm_layer_kwargs,
             num_features=output_dim,
         )
@@ -420,12 +429,124 @@ class FeedForwardBlock(torch.nn.Module):
         if is_residual:
             self.nn = Residual(self.nn, **residual_kwargs)
 
-        dropout_layer = get_dropout(dropout)
+        dropout_layer = get_dropout(dropout, kwargs=dropout_kwargs)
         if dropout_layer is not None:
             if isinstance(self.nn, Residual):
                 self.nn = torch.nn.Sequential(self.nn, dropout_layer)
             elif isinstance(self.nn, torch.nn.Sequential):
                 self.nn.append(dropout_layer)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.nn(x)
+
+
+class FeedForwardConfig(pydantic.BaseModel):
+    input_dim: PositiveInt | None = None
+    hidden_dim: PositiveInt
+    squeeze_dim: PositiveInt | None = None
+    output_dim: PositiveInt | None = None
+    num_blocks: PositiveInt
+    blocks_are_residual = True
+    hidden_activation = "ReLU"
+    output_activation: str | None = None
+    num_layers_per_block = 2
+    dropout: float | None = None
+    norm_layer: str | None = None
+    hidden_activation_kwargs: dict[str, Any] | None = None
+    output_activation_kwargs: dict[str, Any] | None = None
+    residual_kwargs: dict[str, Any] | None = None
+    norm_layer_kwargs: dict[str, Any] | None = None
+    dropout_kwargs: dict[str, Any] | None = None
+    use_bias = True
+    block_name_template: str | None = None
+
+
+class FeedForward(torch.nn.Module):
+    @classmethod
+    def from_config(cls, config: FeedForwardConfig) -> FeedForward:
+        return cls(**config.dict())
+
+    def __init__(
+        self,
+        input_dim: int | None,
+        hidden_dim: int,
+        num_blocks: int,
+        output_dim: int | None = None,
+        squeeze_dim: int | None = None,
+        blocks_are_residual: bool = True,
+        residual_kwargs: dict[str, Any] | None = None,
+        hidden_activation: ActivationLike = torch.nn.ReLU,
+        hidden_activation_kwargs: dict[str, Any] | None = None,
+        output_activation: ActivationLike = None,
+        output_activation_kwargs: dict[str, Any] | None = None,
+        num_layers_per_block: int = 2,
+        dropout: DropoutLike | None = None,
+        dropout_kwargs: dict[str, Any] | None = None,
+        norm_layer: NormLayerLike = None,
+        norm_layer_kwargs: dict[str, Any] | None = None,
+        use_bias: bool = True,
+        use_linear_in: bool | None = None,
+        use_linear_out: bool | None = None,
+        block_name_template: str | None = None,
+    ) -> None:
+        super().__init__()
+
+        if squeeze_dim is None:
+            squeeze_dim = hidden_dim
+
+        if output_dim is None:
+            output_dim = hidden_dim
+
+        for arg in ["input_dim", "hidden_dim", "squeeze_dim", "output_dim"]:
+            if locals()[arg] is not None and locals()[arg] < 1:
+                raise ValueError(f"{arg} must be at least 1")
+
+        if use_linear_in is None:
+            use_linear_in = input_dim != hidden_dim
+        if use_linear_out is None:
+            use_linear_out = output_dim != hidden_dim
+
+        blocks: OrderedDict[str, torch.nn.Module] = OrderedDict()
+
+        if use_linear_in:
+            if input_dim is None:
+                blocks["linear_in"] = torch.nn.LazyLinear(hidden_dim, use_bias)
+            else:
+                blocks["linear_in"] = torch.nn.Linear(input_dim, hidden_dim, use_bias)
+
+        if block_name_template is None:
+            num_digits = str(max(3, len(str(num_blocks))))
+            block_name_template = "ff_block_{:0" + num_digits + "d}"
+
+        for b in range(num_blocks):
+            block = FeedForwardBlock(
+                input_dim=hidden_dim,
+                hidden_dim=squeeze_dim,
+                output_dim=hidden_dim,
+                num_layers=num_layers_per_block,
+                is_residual=blocks_are_residual,
+                hidden_activation=hidden_activation,
+                hidden_activation_kwargs=hidden_activation_kwargs,
+                output_activation=hidden_activation,
+                output_activation_kwargs=hidden_activation_kwargs,
+                dropout=dropout,
+                dropout_kwargs=dropout_kwargs,
+                norm_layer=norm_layer,
+                norm_layer_kwargs=norm_layer_kwargs,
+                residual_kwargs=residual_kwargs,
+                use_bias=use_bias,
+            )
+            block_name = block_name_template.format(b)
+            blocks[block_name] = block
+
+        if use_linear_out:
+            blocks["linear_out"] = torch.nn.Linear(hidden_dim, output_dim, use_bias)
+
+        activation_out = get_activation(output_activation, output_activation_kwargs)
+        if activation_out is not None:
+            blocks["activation_out"] = activation_out
+
+        self.nn = torch.nn.Sequential(blocks)
 
     def forward(self, x: Tensor) -> Tensor:
         return self.nn(x)
