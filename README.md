@@ -1,6 +1,9 @@
 # torch-simple
 
-Simple things that makes working with torch more convenient
+Simple things that make working with torch more convenient
+
+Currently work-in-progress, not yet released as a package, expect breaking changes.
+
 
 
 ## features:
