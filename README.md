@@ -1,8 +1,8 @@
 # torch-simple
 
-Simple things that make working with torch more convenient
+Things I wish were in torch.
 
-Currently work-in-progress, not yet released as a package, expect breaking changes.
+Breaking changes can occur. Not released as a package.
 
 
 
